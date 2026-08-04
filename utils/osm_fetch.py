@@ -7,12 +7,14 @@ packages (temples & other places of worship, historic sites, museums,
 viewpoints, notable natural features) within a radius of a center point.
 """
 
+import time
 import requests
 import streamlit as st
 
 # Try the main instance first, fall back to a mirror if it's rate-limited
 # or timing out -- the free public Overpass servers are shared infra and
-# do occasionally throttle or hiccup under load.
+# do occasionally throttle or hiccup under load, especially on repeated
+# searches in a short window (per-IP rate limiting).
 OVERPASS_URLS = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
@@ -79,25 +81,31 @@ def fetch_osm_pois(lat: float, lon: float, radius_m: int = 15000):
     last_error = None
     resp = None
     for url in OVERPASS_URLS:
-        try:
-            resp = requests.post(url, data={"data": query}, timeout=35)
-            resp.raise_for_status()
-            last_error = None
+        for attempt in range(2):  # one retry per mirror, with a short backoff
+            try:
+                resp = requests.post(url, data={"data": query}, timeout=35)
+                resp.raise_for_status()
+                last_error = None
+                break
+            except requests.exceptions.RequestException as e:
+                last_error = e
+                resp = None
+                if attempt == 0:
+                    time.sleep(3)  # brief pause before retrying, helps with 429s
+                continue
+        if resp is not None:
             break
-        except requests.exceptions.RequestException as e:
-            last_error = e
-            resp = None
-            continue
 
     if resp is None:
-        # Surface something useful in the Streamlit UI instead of a raw
-        # traceback -- rate limiting (429) and timeouts (504) are the
-        # most common causes with the free public Overpass servers.
-        st.error(
-            "Couldn't reach OpenStreetMap's Overpass API (it may be "
-            "rate-limited or temporarily down). Try again in a minute, "
-            "or narrow the search radius. "
-            f"Last error: {last_error}"
+        # Don't hard-fail the whole search over this -- OSM is one of two
+        # data sources, and Wikipedia-derived results can still be useful
+        # on their own. Downgrade to a warning, not a blocking error.
+        st.warning(
+            "OpenStreetMap's Overpass API is rate-limited or temporarily "
+            "unavailable right now, so results below are Wikipedia-only "
+            "for this search (no cross-verification). This is usually "
+            "temporary -- wait a minute between searches and try again "
+            f"for the full picture. (Last error: {last_error})"
         )
         return []
 
