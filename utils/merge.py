@@ -1,21 +1,19 @@
 """
 Cross-verifies OSM POIs against Wikipedia's nearby-articles list, and
-filters out anything that isn't actually a temple, heritage/attraction
-site, or activity -- Wikipedia's geosearch returns ANY nearby geotagged
-article (bus stands, universities, hospitals, government offices), so
-this filtering step is what keeps results relevant.
+filters out obvious non-tourism noise (bus stands, universities,
+hospitals, government offices) via a keyword blacklist.
 
-Matching logic (deliberately simple -- good enough for shortlisting,
-not a bulletproof entity-resolution system):
+Deliberately permissive beyond that -- prioritizes giving the manager
+plenty of candidates to eyeball over perfect precision. Matching logic:
   - Two records "match" if they're within MATCH_RADIUS_KM of each other
     AND their names are similar enough (fuzzy string match).
   - A matched OSM POI is marked verified=True and gets the Wikipedia
     extract + thumbnail attached.
-  - Wikipedia articles with no nearby OSM match are only kept if their
-    name/description clearly indicates one of our three categories --
-    otherwise they're dropped as noise.
-  - Everything (OSM-derived or Wikipedia-only) also passes through a
-    blacklist and a minimum-description-length quality gate.
+  - Unmatched OSM POIs get a second-chance name-based Wikipedia search.
+  - Wikipedia articles with no OSM match are kept and best-effort
+    categorized by keyword, rather than dropped.
+  - Anything without a real description gets a generic fallback label
+    instead of being excluded.
 """
 
 from difflib import SequenceMatcher
@@ -40,8 +38,7 @@ BLACKLIST_KEYWORDS = [
 ]
 
 # Used only to reclassify a Wikipedia-only article (no OSM match) into
-# one of our three real categories. If nothing matches, the article is
-# dropped rather than kept as a vague "other" bucket.
+# one of our three real categories.
 TEMPLE_KEYWORDS = [
     "temple", "church", "mosque", "synagogue", "shrine", "basilica",
     "cathedral", "mutt", "ashram", "gurudwara", "monastery",
@@ -57,11 +54,15 @@ ACTIVITY_KEYWORDS = [
     "viewpoint", "dam", "cave", "lighthouse", "theme park",
 ]
 
-# Below this many characters of description, an entry is dropped --
-# a one-line stub usually signals something too minor to be package-worthy.
-# (Loosened from 150 -- was too aggressive combined with the fallback
-# lookup below and dropping too many legitimate, lightly-documented sites.)
-MIN_DESCRIPTION_LENGTH = 80
+CATEGORY_FALLBACK_LABEL = {
+    "temple": "a temple / religious site",
+    "heritage_attraction": "a heritage site or attraction",
+    "activity": "an activity / recreation spot",
+}
+
+# Below this many characters, treat the description as effectively
+# missing (used for a fallback label, not to drop the result).
+MIN_DESCRIPTION_LENGTH = 20
 
 
 def _is_blacklisted(name: str) -> bool:
@@ -70,15 +71,20 @@ def _is_blacklisted(name: str) -> bool:
 
 
 def _reclassify_by_keywords(name: str, description: str):
-    """Returns one of our 3 categories, or None if nothing matches."""
+    """
+    Returns one of our 3 categories based on keyword match. Falls back to
+    'heritage_attraction' (the broadest "worth a look" bucket) rather than
+    dropping the entry -- volume matters more than perfect categorization
+    here, the manager can eyeball and discard irrelevant ones manually.
+    """
     text = f"{name} {description}".lower()
     if any(kw in text for kw in TEMPLE_KEYWORDS):
         return "temple"
-    if any(kw in text for kw in HERITAGE_KEYWORDS):
-        return "heritage_attraction"
     if any(kw in text for kw in ACTIVITY_KEYWORDS):
         return "activity"
-    return None
+    if any(kw in text for kw in HERITAGE_KEYWORDS):
+        return "heritage_attraction"
+    return "heritage_attraction"
 
 
 def _name_similarity(a: str, b: str) -> float:
@@ -130,17 +136,14 @@ def cross_verify(osm_pois: list, wiki_articles: list) -> list:
 
         merged.append(poi)
 
-    # Wikipedia articles with no OSM match: only keep if we can confidently
-    # reclassify them into one of our 3 categories via keywords, and they
-    # pass the blacklist.
+    # Wikipedia articles with no OSM match: keep them all (after blacklist),
+    # reclassified into whichever of our 3 categories fits best.
     for i, w in enumerate(wiki_articles):
         if i in used_wiki_indices:
             continue
         if _is_blacklisted(w["title"]):
             continue
         category = _reclassify_by_keywords(w["title"], w["extract"])
-        if category is None:
-            continue
         merged.append(
             {
                 "name": w["title"],
@@ -154,8 +157,15 @@ def cross_verify(osm_pois: list, wiki_articles: list) -> list:
             }
         )
 
-    # Quality gate: drop anything with too thin a description to be
-    # package-worthy or genuinely useful to a planner.
-    merged = [m for m in merged if len(m.get("description") or "") >= MIN_DESCRIPTION_LENGTH]
+    # Fill in a light fallback label for anything that still has no
+    # description at all (rather than dropping it) -- keeps volume up,
+    # manager can still tell at a glance it's a thin/unverified entry.
+    for m in merged:
+        if len(m.get("description") or "") < MIN_DESCRIPTION_LENGTH:
+            label = CATEGORY_FALLBACK_LABEL.get(m["category"], "a point of interest")
+            m["description"] = (
+                f"Listed as {label} in OpenStreetMap/Wikipedia data; "
+                f"no detailed description available yet. Worth a manual check."
+            )
 
     return merged
