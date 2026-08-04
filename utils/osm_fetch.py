@@ -20,16 +20,22 @@ OVERPASS_URLS = [
     "https://overpass.kumi.systems/api/interpreter",
 ]
 
-# category -> Overpass tag filter, used both for querying and later scoring.
-# Keep this list editable -- it's the main "what counts as relevant" knob.
+# category -> Overpass tag filter. Narrowed down to three buckets that
+# actually matter for IRCTC package planning: temples/worship sites,
+# heritage & attractions, and activities/recreation. (Dropped generic
+# "artwork" and folded viewpoints into activities -- neither warranted
+# being its own category.)
 CATEGORY_FILTERS = {
-    "temple_or_worship": '["amenity"="place_of_worship"]',
-    "historic_heritage": '["historic"]',
-    "museum": '["tourism"="museum"]',
-    "attraction": '["tourism"="attraction"]',
-    "viewpoint": '["tourism"="viewpoint"]',
-    "natural_feature": '["natural"~"beach|waterfall|peak"]',
-    "artwork_landmark": '["tourism"="artwork"]',
+    "temple": '["amenity"="place_of_worship"]',
+    "heritage_attraction": '["historic"]',
+    "heritage_attraction_2": '["tourism"="museum"]',
+    "heritage_attraction_3": '["tourism"="attraction"]',
+    "activity": '["tourism"="viewpoint"]',
+    "activity_2": '["tourism"="zoo"]',
+    "activity_3": '["tourism"="theme_park"]',
+    "activity_4": '["leisure"="park"]',
+    "activity_5": '["leisure"="water_park"]',
+    "activity_6": '["natural"~"beach|waterfall"]',
 }
 
 
@@ -50,21 +56,19 @@ def _build_query(lat: float, lon: float, radius_m: int) -> str:
 
 
 def _classify(tags: dict) -> str:
-    """Map a POI's OSM tags back to one of our simple categories."""
+    """Map a POI's OSM tags back to one of our three categories."""
     if tags.get("amenity") == "place_of_worship":
-        return "temple_or_worship"
+        return "temple"
     if "historic" in tags:
-        return "historic_heritage"
-    if tags.get("tourism") == "museum":
-        return "museum"
-    if tags.get("tourism") == "attraction":
-        return "attraction"
-    if tags.get("tourism") == "viewpoint":
-        return "viewpoint"
-    if tags.get("tourism") == "artwork":
-        return "artwork_landmark"
-    if tags.get("natural") in ("beach", "waterfall", "peak"):
-        return "natural_feature"
+        return "heritage_attraction"
+    if tags.get("tourism") in ("museum", "attraction"):
+        return "heritage_attraction"
+    if tags.get("tourism") in ("viewpoint", "zoo", "theme_park"):
+        return "activity"
+    if tags.get("leisure") in ("park", "water_park"):
+        return "activity"
+    if tags.get("natural") in ("beach", "waterfall"):
+        return "activity"
     return "other"
 
 
