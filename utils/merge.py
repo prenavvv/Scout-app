@@ -20,9 +20,11 @@ not a bulletproof entity-resolution system):
 
 from difflib import SequenceMatcher
 from utils.geo import haversine_km
+from utils.wiki_fetch import search_wiki_by_name
 
-MATCH_RADIUS_KM = 0.15  # 150 m
-NAME_SIMILARITY_THRESHOLD = 0.55
+MATCH_RADIUS_KM = 0.3  # 300 m -- loosened from 150m, way-tagged complexes
+                        # often have a centroid offset from their wiki coords
+NAME_SIMILARITY_THRESHOLD = 0.45
 
 # Names containing any of these are dropped outright, regardless of
 # category or source -- these are the "who would actually go there"
@@ -57,7 +59,9 @@ ACTIVITY_KEYWORDS = [
 
 # Below this many characters of description, an entry is dropped --
 # a one-line stub usually signals something too minor to be package-worthy.
-MIN_DESCRIPTION_LENGTH = 150
+# (Loosened from 150 -- was too aggressive combined with the fallback
+# lookup below and dropping too many legitimate, lightly-documented sites.)
+MIN_DESCRIPTION_LENGTH = 80
 
 
 def _is_blacklisted(name: str) -> bool:
@@ -112,6 +116,17 @@ def cross_verify(osm_pois: list, wiki_articles: list) -> list:
             poi["description"] = wiki_articles[best_idx]["extract"]
             poi["thumbnail_url"] = wiki_articles[best_idx].get("thumbnail_url")
             used_wiki_indices.add(best_idx)
+        else:
+            # Didn't match anything via nearby-article geosearch -- try a
+            # direct name-based search before giving up on this POI. This
+            # recovers real places whose Wikipedia article exists but sits
+            # just outside the proximity match, or wasn't in the top
+            # geosearch results at all.
+            fallback = search_wiki_by_name(poi["name"], poi["lat"], poi["lon"])
+            if fallback:
+                poi["verified"] = True
+                poi["description"] = fallback["extract"]
+                poi["thumbnail_url"] = fallback.get("thumbnail_url")
 
         merged.append(poi)
 
