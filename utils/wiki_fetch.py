@@ -18,8 +18,11 @@ HEADERS = {"User-Agent": "irctc-attraction-scout/1.0 (internal tool)"}
 @st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
 def fetch_wiki_nearby(lat: float, lon: float, radius_m: int = 15000, limit: int = 50):
     """
-    Returns a list of dicts: { title, lat, lon, extract }
+    Returns a list of dicts: { title, lat, lon, extract, thumbnail_url }
     radius_m is capped at 10000 by Wikipedia's geosearch API.
+    extract is a longer excerpt (up to ~10 sentences), not just the intro
+    line, since the manager wants real detail (what it is, where, why it
+    matters) -- not a one-line teaser.
     """
     radius_m = min(radius_m, 10000)
 
@@ -45,9 +48,11 @@ def fetch_wiki_nearby(lat: float, lon: float, radius_m: int = 15000, limit: int 
     titles = "|".join(p["title"] for p in pages)
     extract_params = {
         "action": "query",
-        "prop": "extracts",
-        "exintro": True,
+        "prop": "extracts|pageimages",
+        "exsentences": 10,       # longer excerpt, not just the intro teaser
         "explaintext": True,
+        "piprop": "thumbnail",
+        "pithumbsize": 400,
         "titles": titles,
         "format": "json",
     }
@@ -57,8 +62,13 @@ def fetch_wiki_nearby(lat: float, lon: float, radius_m: int = 15000, limit: int 
     except requests.exceptions.RequestException as e:
         st.error(f"Couldn't fetch Wikipedia article extracts: {e}")
         return []
+
     pages_by_title = resp2.json().get("query", {}).get("pages", {})
-    extract_lookup = {p["title"]: p.get("extract", "") for p in pages_by_title.values()}
+    extract_lookup = {}
+    thumb_lookup = {}
+    for p in pages_by_title.values():
+        extract_lookup[p["title"]] = p.get("extract", "")
+        thumb_lookup[p["title"]] = p.get("thumbnail", {}).get("source")
 
     results = []
     for p in pages:
@@ -68,6 +78,7 @@ def fetch_wiki_nearby(lat: float, lon: float, radius_m: int = 15000, limit: int 
                 "lat": p["lat"],
                 "lon": p["lon"],
                 "extract": extract_lookup.get(p["title"], ""),
+                "thumbnail_url": thumb_lookup.get(p["title"]),
             }
         )
     return results
